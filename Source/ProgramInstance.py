@@ -1,4 +1,4 @@
-from CCSqlite.CCSqlite import CCSqlite
+from Source.CCSqlite.CCSqlite import CCSqlite
 
 class ProgramInstance:
 	def BeginPlay(self):
