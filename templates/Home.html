@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Home</title>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+            background: #f5f7fb;
+        }
+        .center-wrap {
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card-button {
+            width: 160px;
+            height: 160px;
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 6px 18px rgba(20,20,40,0.08);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            color: #1f2937;
+            transition: transform .12s ease, box-shadow .12s ease;
+        }
+        .card-button:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 30px rgba(20,20,40,0.12);
+        }
+        .icon {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 10px;
+            fill: #2563eb;
+        }
+        .label {
+            font-size: 16px;
+            font-weight: 600;
+            color: #111827;
+        }
+    </style>
+</head>
+<body>
+    <div class="center-wrap">
+        <a class="card-button" href="/ResumeInput" role="button">
+            <!-- 记事本图标（SVG） -->
+            <svg class="icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M7 3a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7.414A2 2 0 0 0 17.414 6L14 2.586A2 2 0 0 0 12.586 2H7zM13 3.414L16.586 7H14a1 1 0 0 1-1-1V3.414zM8 9h8v2H8V9zm0 4h8v2H8v-2z"/>
+            </svg>
+            <div class="label">简历录入</div>
+        </a>
+    </div>
+</body>
+</html>

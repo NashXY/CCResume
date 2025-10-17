@@ -1,11 +1,19 @@
+import logging
+import os
 from Source.CCSqlite.CCSqlite import CCSqlite
 
-class ProgramInstance:
-	def BeginPlay(self):
-		print("BeginPlay called.")
-		db = CCSqlite("Saved/DataBase/example.db")
-		db.Execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")
-		db.Close()
+logger = logging.getLogger(__name__)
 
-	def EndPlay(self):
-		print("EndPlay called.")
+
+class ProgramInstance:
+    def BeginPlay(self):
+        logger.info('BeginPlay called.')
+        # ensure directory exists
+        os.makedirs('Saved/DataBase', exist_ok=True)
+        db = CCSqlite('Saved/DataBase/example.db')
+        db.Execute('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)')
+        db.Close()
+
+    def EndPlay(self):
+        logger.info('EndPlay called.')
+
