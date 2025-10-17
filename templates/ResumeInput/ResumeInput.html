@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>简历录入</title>
+	<style>
+		body { font-family: Arial, sans-serif; background: #f3f4f6; margin:0; padding:20px }
+		.container { max-width:900px; margin:20px auto; background:#fff; padding:20px; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,0.06) }
+		.row { display:flex; gap:16px; }
+		.col { flex:1 }
+		label { display:block; margin:10px 0 6px }
+		input[type=text], input[type=email], input[type=number], textarea { width:100%; padding:8px 10px; border:1px solid #ddd; border-radius:6px }
+		textarea { min-height:120px }
+		.section { margin-top:14px }
+		.files-drop { margin-top:10px; border:2px dashed #cbd5e1; border-radius:8px; padding:18px; text-align:center; background:#fafafa }
+		.files-drop.dragover { border-color:#2563eb; background:#f0f8ff }
+		.file-list { margin-top:10px; text-align:left }
+		button { margin-top:14px; padding:10px 14px; background:#2563eb; color:#fff; border:none; border-radius:6px; cursor:pointer }
+		.hint { color:#6b7280; font-size:13px }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h2>简历录入</h2>
+		<form id="resumeForm" method="post" action="#" enctype="multipart/form-data">
+			<label for="name">姓名</label>
+			<input id="name" name="name" type="text" placeholder="请输入姓名" />
+
+			<label for="age">年龄</label>
+			<input id="age" name="age" type="number" min="0" placeholder="年龄" />
+
+			<label for="contact">联系方式</label>
+			<input id="contact" name="contact" type="text" placeholder="手机或电话" />
+
+			<label for="email">邮箱</label>
+			<input id="email" name="email" type="email" placeholder="example@mail.com" />
+
+			<div class="section">
+				<h3>工作经历</h3>
+				<label><input id="currently" name="currently" type="checkbox"> 目前在职</label>
+				<label for="company">公司</label>
+				<input id="company" name="company" type="text" placeholder="公司名称" />
+
+				<label for="project">项目名称</label>
+				<input id="project" name="project" type="text" placeholder="项目/产品名称" />
+
+				<label for="work">工作经历描述</label>
+				<textarea id="work" name="work" placeholder="时间 - 职位 - 工作内容（多行）"></textarea>
+			</div>
+
+			<div class="section">
+				<h3>教育经历</h3>
+				<label for="edu">教育经历</label>
+				<textarea id="edu" name="edu" placeholder="学校 - 专业 - 时间（多行）"></textarea>
+			</div>
+
+			<div class="section">
+				<label>上传简历或附件（支持拖拽）</label>
+				<div id="dropZone" class="files-drop">
+					<div class="hint">将文件拖到此处，或点击选择文件</div>
+					<input id="fileInput" type="file" name="files" multiple style="display:none" />
+					<div id="fileList" class="file-list"></div>
+				</div>
+			</div>
+
+			<button type="submit">提交</button>
+		</form>
+	</div>
+
+	<script>
+		const dropZone = document.getElementById('dropZone');
+		const fileInput = document.getElementById('fileInput');
+		const fileList = document.getElementById('fileList');
+
+		dropZone.addEventListener('click', () => fileInput.click());
+
+		fileInput.addEventListener('change', () => {
+			updateList(Array.from(fileInput.files));
+		});
+
+		dropZone.addEventListener('dragover', (e) => {
+			e.preventDefault();
+			dropZone.classList.add('dragover');
+		});
+		dropZone.addEventListener('dragleave', (e) => {
+			dropZone.classList.remove('dragover');
+		});
+		dropZone.addEventListener('drop', (e) => {
+			e.preventDefault();
+			dropZone.classList.remove('dragover');
+			const files = Array.from(e.dataTransfer.files);
+			// 设置到 fileInput（不可直接设置 files），但我们可以显式显示
+			updateList(files);
+		});
+
+		function updateList(files){
+			if(!files || files.length === 0){ fileList.innerHTML = '<div class="hint">未选择文件</div>'; return; }
+			fileList.innerHTML = '';
+			files.forEach(f => {
+				const el = document.createElement('div');
+				el.textContent = f.name + ' (' + Math.round(f.size/1024) + ' KB)';
+				fileList.appendChild(el);
+			});
+		}
+
+		// 初始化为空提示
+		updateList([]);
+	</script>
+</body>
+</html>
+
