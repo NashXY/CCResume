@@ -104,8 +104,36 @@ def ResumeParse(text: str) -> ResumeParseResult:
 
     s_clean = '\n'.join(filtered_lines)
 
-    # 以空行为块分割（用清洗并剥离个人信息后的文本）
-    blocks = [b.strip() for b in re.split(r"\n\s*\n+", s_clean) if b.strip()]
+    # 优先按常见章节标题划分块，避免教育/项目/工作混在一块
+    header_patterns = [
+        r'^\s*教育经历\s*$', r'^\s*教育背景\s*$', r'^\s*教育\s*$',
+        r'^\s*项目经验\s*$', r'^\s*项目经历\s*$', r'^\s*项目\s*$',
+        r'^\s*工作经历\s*$', r'^\s*工作经验\s*$', r'^\s*职业经历\s*$',
+        r'^\s*实习经历\s*$', r'^\s*自我评价\s*$', r'^\s*主要技能\s*$',
+    ]
+    header_re = re.compile('|'.join('(?:%s)' % p for p in header_patterns), re.I)
+
+    lines_for_blocks = [ln for ln in s_clean.splitlines()]
+    blocks = []
+    current = []
+    current_header = None
+    for ln in lines_for_blocks:
+        if header_re.match(ln.strip()):
+            # 开始新的块：先把现有块推入
+            if current:
+                blocks.append('\n'.join(current).strip())
+                current = []
+            # 把标题也作为块的首行
+            current.append(ln.strip())
+            current_header = ln.strip()
+            continue
+        # 普通行追加到当前块
+        current.append(ln)
+    if current:
+        blocks.append('\n'.join(current).strip())
+
+    # 最后再把相邻空行产生的多段合并或清理空白块
+    blocks = [b for b in (b.strip() for b in blocks) if b]
 
 
 
@@ -179,7 +207,24 @@ def ResumeParse(text: str) -> ResumeParseResult:
             return '\n'.join(lines[i:]).strip()
         return block
 
+    # 预编译标题匹配用于直接归类
+    project_header_re = re.compile(r'^(项目经验|项目经历|项目)\b', re.I)
+    education_header_re = re.compile(r'^(教育经历|教育背景|教育)\b', re.I)
+
     for block in blocks:
+        # 如果块以项目/教育标题开头，直接归类，避免关键字稀释或误判
+        first_line = block.splitlines()[0].strip() if block.splitlines() else ''
+        if project_header_re.match(first_line):
+            # 去掉标题行后保存作为一个 project 条目
+            body = '\n'.join(block.splitlines()[1:]).strip()
+            if body:
+                result.projects.append(body)
+            continue
+        if education_header_re.match(first_line):
+            body = '\n'.join(block.splitlines()[1:]).strip()
+            if body:
+                result.education.append(body)
+            continue
         # 先剥离块前面的元信息行
         block = strip_leading_meta_lines(block)
         if not block:
@@ -188,6 +233,7 @@ def ResumeParse(text: str) -> ResumeParseResult:
         personal_block_re = re.compile(r'(姓名|性别|手机|电话|微信|邮箱|年龄|婚姻|户籍|居住地|基本资料|目前公司|目前职位)', re.I)
         if personal_block_re.search(block) and len(block) < 200:
             continue
+
         sc = score_block(block)
         # 要判为 education，需要 education 特征明显
         if sc['education'] >= 3:
