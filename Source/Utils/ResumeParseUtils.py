@@ -36,6 +36,11 @@ def ResumeParse(text: str) -> ResumeParseResult:
     s = re.sub(r'[A-Fa-f0-9]{16,}', '', s)
     # 去掉连续的 ~ 或特殊分隔符
     s = re.sub(r'~{2,}', '', s)
+    # 去掉常见的导出/黏贴残留的长混合字母数字ID，例如 "XV639S5FVpSwJG7U_yfRearmg"
+    # 匹配长度较长(12+) 的字母数字下划线或连字符序列
+    s = re.sub(r"\b[A-Za-z0-9_\-]{12,}\b", '', s)
+    # 去掉 JS 对象被字符串化后的占位文本
+    s = re.sub(r'\[object Object\]', '', s, flags=re.I)
 
     # 按行过滤明显噪声行
     lines = [ln for ln in s.splitlines()]
