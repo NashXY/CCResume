@@ -51,16 +51,14 @@ class ResumeParseResult:
     phone: Optional[str] = None
     email: Optional[str] = None
     careers: List[str] = field(default_factory=list)
-    projects: List[str] = field(default_factory=list)
     education: List[str] = field(default_factory=list)
     # 结构化输出
     careers_struct: List[Dict[str, Any]] = field(default_factory=list)
-    projects_struct: List[Dict[str, Any]] = field(default_factory=list)
     education_struct: List[Dict[str, Any]] = field(default_factory=list)
 
 
-def ResumeParse(text: str) -> ResumeParseResult:
-    """根据块分类启发式从简历文本中提取 name, age, phone, projects, education。
+def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
+    """根据块分类启发式从简历文本中提取 name, age, phone, education，以及工作/项目类信息合并在 careers 中。
 
     返回 ResumeParseResult 实例。
     """
@@ -329,7 +327,7 @@ def ResumeParse(text: str) -> ResumeParseResult:
                 pass
 
     # 关键词
-    project_kw = [r'项目', r'项目经验', r'project', r'实现', r'功能', r'优化', r'技术栈', r'GitHub', r'仓库', r'负责', r'实现了', r'解决']
+    project_kw = [r'项目', r'项目经验', r'project', r'实现', r'功能', r'优化', r'技术栈', r'GitHub', r'仓库', r'负责', r'实现了', r'解决', r'业绩', r'项目描述', r'项目名称', r'成果', r'完成']
     education_kw = [r'学校', r'学位', r'毕业', r'本科', r'硕士', r'博士', r'专业']
     work_kw = [r'公司', r'任职', r'职位', r'职责', r'负责', r'工作内容']
     tech_regex = re.compile(r'\b(Python|Java|C\+\+|C#|React|Django|Flask|Docker|Kubernetes|MySQL|PostgreSQL|SQL)\b', re.I)
@@ -362,6 +360,12 @@ def ResumeParse(text: str) -> ResumeParseResult:
         if re.search(r'(姓名|性别|手机|电话|微信|邮箱|年龄|婚姻|户籍|居住地|基本资料)', block, re.I):
             w = max(0, w - 2)
             p = max(0, p - 2)
+        # 如果块包含 '业绩' 或 '项目描述' 等明显的项目指示词，提高 project 得分
+        if re.search(r'(业绩|项目描述|项目名称|成果)', block, re.I):
+            p += 3
+        # 如果块含有编号列表且出现技术关键词，则很可能是项目经历/项目说明
+        if re.search(r'(?m)^\s*\d+[\.|\)|、]\s+', block) and tech_count > 0:
+            p += 3
         return {"project": p, "education": e, "work": w}
 
     # 只把满足一定条件的块归为 projects/education，过滤残余噪声块
@@ -395,6 +399,14 @@ def ResumeParse(text: str) -> ResumeParseResult:
     education_header_re = re.compile(r'^(教育经历|教育背景|教育)\b', re.I)
     career_header_re = re.compile(r'^(工作经历|工作经验|职业经历|任职|公司)\b', re.I)
 
+    if debug:
+        print('\n[DEBUG] Found blocks:')
+        for i, b in enumerate(blocks):
+            snippet = b.replace('\n', ' || ')[:200]
+            sc_tmp = score_block(b)
+            print(f'  [{i}] len={len(b)} score={sc_tmp} header={b.splitlines()[0] if b.splitlines() else ""}')
+            print('    ', snippet)
+
     for block in blocks:
         # 如果块以项目/教育标题开头，直接归类，避免关键字稀释或误判
         first_line = block.splitlines()[0].strip() if block.splitlines() else ''
@@ -410,10 +422,10 @@ def ResumeParse(text: str) -> ResumeParseResult:
                 result.careers.append(career_text)
             continue
         if project_header_re.match(first_line):
-            # 去掉标题行后保存作为一个 project 条目
+            # 去掉标题行后保存作为一个 careers 条目（把项目经验并入 careers）
             body = '\n'.join(block.splitlines()[1:]).strip()
             if body:
-                result.projects.append(body)
+                result.careers.append(body)
             continue
         if education_header_re.match(first_line):
             body = '\n'.join(block.splitlines()[1:]).strip()
@@ -436,22 +448,21 @@ def ResumeParse(text: str) -> ResumeParseResult:
             continue
 
         sc = score_block(block)
-        # 要判为 education，需要 education 特征明显
-        if sc['education'] >= 3:
-            result.education.append(block)
-            continue
-
         # 判为 career（职业/公司经历）：包含公司/任职/职位/工作地点等关键词且篇幅较长
         if (sc['work'] >= 2 or re.search(r'公司|任职|职位|工作地点|职责|业绩', block, re.I)):
             result.careers.append(block)
+            continue
+        # 要判为 education，需要 education 特征明显（放在 career 检测之后，避免混淆）
+        if sc['education'] >= 3:
+            result.education.append(block)
             continue
 
         # 判为 project 的额外要求：要么有项目关键词/职责/业绩等，要么包含技术关键词
         has_project_keywords = any(re.search(kw, block, re.I) for kw in [r'项目', r'项目经验', r'职责', r'业绩', r'完成', r'负责'])
         tech_count = len(tech_regex.findall(block))
         if (sc['project'] >= 2 and (has_project_keywords or tech_count > 0)):
-            # 明确为项目段
-            result.projects.append(block)
+            # 明确为项目段，把项目并入 careers 列表
+            result.careers.append(block)
             continue
 
         # 其余视为非目标块，忽略
@@ -469,8 +480,33 @@ def ResumeParse(text: str) -> ResumeParseResult:
         return out
 
     result.careers = clean_list(result.careers)
-    result.projects = clean_list(result.projects)
     result.education = clean_list(result.education)
+
+    # 从 career 块中尝试抽取内嵌的项目/业绩段并作为独立 career 条目加入（很多简历把项目放在工作经历的业绩部分）
+    project_split_re = re.compile(r'(?:业绩[:：]?|项目描述[:：]?|项目[:：]?|Project[:：]?)', re.I)
+    numbered_re = re.compile(r'(?m)^\s*\d+[\.|、\)]\s+')
+    extra_careers = []
+    for c in result.careers:
+        parts = project_split_re.split(c)
+        # parts[0] 为 career 主体，后续为各个项目/业绩段
+        if len(parts) <= 1:
+            continue
+        # 保留 career 主体为一项
+        main = parts[0].strip()
+        if main:
+            extra_careers.append(main)
+        for part in parts[1:]:
+            p_text = part.strip()
+            if not p_text:
+                continue
+            # 如果看起来像编号列表或包含项目关键字，则作为单独的 career/项目条目加入
+            if numbered_re.search(p_text) or re.search(r'项目|业绩|完成|成果', p_text, re.I):
+                extra_careers.append(p_text)
+    # 用提取出的条目替换原有 careers（去重）
+    if extra_careers:
+        # 将原有没有被拆分的 career 中未出现的项也保留
+        # 但更简单的策略是用 extra_careers 替换 result.careers 中对应项
+        result.careers = clean_list(extra_careers)
 
     # 启发式结构化拆分（尽量提取 company/title/period/responsibilities/technologies）
     def split_career_block(block: str) -> Dict[str, Any]:
@@ -542,12 +578,9 @@ def ResumeParse(text: str) -> ResumeParseResult:
         item['technologies'] = list(dict.fromkeys(item['technologies']))
         return item
 
-    # 构建结构化列表
+    # 构建结构化列表（对所有 careers 进行结构化拆分）
     for c in result.careers:
         result.careers_struct.append(split_career_block(c))
-    for p in result.projects:
-        # 对项目也用相同拆分器（project name -> company/title heuristics）
-        result.projects_struct.append(split_career_block(p))
     for e in result.education:
         result.education_struct.append({'raw': e})
 

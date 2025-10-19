@@ -43,7 +43,7 @@ class ResumeInputHandler:
         try:
             parsed = ResumeParse(text)
         except Exception as e:
-            parsed = {"name": None, "age": None, "phone": None, "projects": [], "education": [], "error": f"parse_failed: {str(e)}"}
+            parsed = {"name": None, "age": None, "phone": None, "careers": [], "education": [], "error": f"parse_failed: {str(e)}"}
 
         if extraction_error:
             parsed['error'] = extraction_error

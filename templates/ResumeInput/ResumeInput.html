@@ -57,10 +57,8 @@
 			</div>
 
 			<div class="section">
-				<h3>项目经历</h3>
-				<label for="projects">项目经历描述</label>
-				<textarea id="projects" name="projects" placeholder="项目名 - 角色 - 主要职责/技术（多行）"></textarea>
-			</div>
+			<!-- 项目经历区已移除，项目内容将合并到职业经历中 -->
+
 
 			<div class="section">
 				<h3>教育经历</h3>
@@ -177,13 +175,7 @@
 							else careerEl.value = joinedCareer;
 						}
 
-						// parsed.projects -> 填到项目经历 textarea
-						const projectsEl = document.getElementById('projects');
-						if(projectsEl && parsed.projects && Array.isArray(parsed.projects) && parsed.projects.length>0){
-							const joinedProjects = parsed.projects.join('\n\n-----\n\n');
-							if(projectsEl.value && projectsEl.value.trim().length>0) projectsEl.value = projectsEl.value + '\n\n' + joinedProjects;
-							else projectsEl.value = joinedProjects;
-						}
+						// 注意：项目经历 (projects) 已合并到职业经历 (careers)，因此不再填充单独的 projects 区域
 
 						// education -> 填到教育经历 textarea
 						const eduEl = document.getElementById('edu');
