@@ -55,11 +55,23 @@ class ResumeParseResult:
     # 结构化输出
     careers_struct: List[Dict[str, Any]] = field(default_factory=list)
     education_struct: List[Dict[str, Any]] = field(default_factory=list)
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'age': self.age,
+            'sex': self.sex,
+            'phone': self.phone,
+            'email': self.email,
+            'careers': self.careers,
+            'careers_struct': self.careers_struct,
+            'education': self.education,
+            'education_struct': self.education_struct,
+        }
 
 
 def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
     """根据块分类启发式从简历文本中提取 name, age, phone, education，以及工作/项目类信息合并在 careers 中。
-
+        it2_clean = re.sub(r'[^\u4e00-\u9fa5A-Za-z0-9]', '', it2)
     返回 ResumeParseResult 实例。
     """
     if not text or not text.strip():
@@ -155,32 +167,46 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
             result.sex = it_strip
             clean_lines = [ln for ln in clean_lines if ln.strip() != it_strip]
             continue
-    # 如果 header_items 没设置 name，我们将在 header_candidate 中寻找候选姓名（排除诸如'年龄'等词）
+    # 如果 header_items 没设置 name，在 header_candidate 中寻找候选姓名（排除诸如'年龄'等词）
     result = ResumeParseResult() if 'result' not in locals() else result
     stop_words_for_name = set(['年龄', '性别', '个人优势', '求职意向', '期望薪资', '期望城市', '工作经验'])
     candidate_name = None
+    # 优先从 header_items 中找纯中文 2-4 字项（可能含性别尾缀）
     for it in header_items:
         if not it:
             continue
         it2 = it.strip()
         if any(sw in it2 for sw in stop_words_for_name):
             continue
+        # 清理常见噪声
+        it2_clean = re.sub(r'[^-\u4e00-\u9fa5]', '', it2)
         # 优先选择纯中文且长度为2-4的项
-        if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', it2):
-            candidate_name = it2
+        if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', it2_clean):
+            candidate_name = it2_clean
             break
     # 如果未找到且可用 jieba，尝试 posseg 在 header_candidate 上找 nr
     if not candidate_name and _HAS_JIEBA and re.search(r'[\u4e00-\u9fff]', header_candidate):
         try:
             for w, flag in pseg.cut(header_candidate):
-                if flag == 'nr' and len(w) >= 2 and len(w) <= 4 and w not in stop_words_for_name:
+                if flag == 'nr' and 2 <= len(w) <= 4 and w not in stop_words_for_name:
                     candidate_name = w
                     break
         except Exception:
             pass
+
+    # 如果找到候选姓名，写入 result
     if candidate_name:
-        # 去除末尾可能跟着的性别标记（例如 '田晋宇男'）
-        result.name = re.sub(r'(男|女)$', '', candidate_name)
+        result.name = candidate_name
+
+    # 最后的回退：如果仍未识别到姓名，从 header_candidate 或全文抓取第一个符合姓名模式的中文词
+    if not result.name:
+        m = re.search(r'([\u4e00-\u9fa5]{2,4})\s*(?:男|女)?', header_candidate)
+        if m:
+            result.name = m.group(1)
+        else:
+            m2 = re.search(r'([\u4e00-\u9fa5]{2,4})\s*(?:男|女)?', s)
+            if m2:
+                result.name = m2.group(1)
 
     # 如果之前未通过 header_items 设置到 phone/email/age/sex，则后面再做更严格的提取
 
@@ -274,7 +300,8 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
         # 如果某行匹配公司行且不是块首行，则切分
         split_indices = []
         for idx, ln in enumerate(lines):
-            if idx > 0 and company_line_re.match(ln.strip()):
+            # 避免把 '职责','业绩','工作地点' 等标记行误判为公司行
+            if idx > 0 and company_line_re.match(ln.strip()) and not re.search(r'\b(职责|业绩|工作地点|工作内容|项目描述)\b', ln, re.I):
                 split_indices.append(idx)
         if not split_indices:
             refined_blocks.append(b)
@@ -330,7 +357,7 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
     project_kw = [r'项目', r'项目经验', r'project', r'实现', r'功能', r'优化', r'技术栈', r'GitHub', r'仓库', r'负责', r'实现了', r'解决', r'业绩', r'项目描述', r'项目名称', r'成果', r'完成']
     education_kw = [r'学校', r'学位', r'毕业', r'本科', r'硕士', r'博士', r'专业']
     work_kw = [r'公司', r'任职', r'职位', r'职责', r'负责', r'工作内容']
-    tech_regex = re.compile(r'\b(Python|Java|C\+\+|C#|React|Django|Flask|Docker|Kubernetes|MySQL|PostgreSQL|SQL)\b', re.I)
+    tech_regex = re.compile(r'\b(Python|Java|C\+\+|C#|React|Django|Flask|Docker|Kubernetes|MySQL|PostgreSQL|SQL|FPGA|WiFi|BT|5G|4G|SMF|Golang|Go|OpenWrt|openwrt|FPGA|Ethernet)\b', re.I)
 
     def score_block(block: str) -> Dict[str, int]:
         p = e = w = 0
@@ -482,6 +509,25 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
     result.careers = clean_list(result.careers)
     result.education = clean_list(result.education)
 
+    # 后处理：合并短碎片到后续条目（如果后续条目看起来像职责/业绩或编号列表）
+    if result.careers:
+        merged = []
+        i = 0
+        numbered_re = re.compile(r'(?m)^\s*\d+[\.、\)]\s+')
+        keyword_re = re.compile(r'\b(业绩|职责|完成|成果|项目)\b', re.I)
+        while i < len(result.careers):
+            cur = result.careers[i]
+            # 如果当前条目较短且存在下一个条目，并且下一个条目看起来像编号列表或含职责关键词，则合并
+            if i + 1 < len(result.careers) and len(cur) < 160:
+                nxt = result.careers[i+1]
+                if numbered_re.search(nxt) or keyword_re.search(nxt):
+                    merged.append((cur + '\n' + nxt).strip())
+                    i += 2
+                    continue
+            merged.append(cur)
+            i += 1
+        result.careers = clean_list(merged)
+
     # 从 career 块中尝试抽取内嵌的项目/业绩段并作为独立 career 条目加入（很多简历把项目放在工作经历的业绩部分）
     project_split_re = re.compile(r'(?:业绩[:：]?|项目描述[:：]?|项目[:：]?|Project[:：]?)', re.I)
     numbered_re = re.compile(r'(?m)^\s*\d+[\.|、\)]\s+')
@@ -502,11 +548,30 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
             # 如果看起来像编号列表或包含项目关键字，则作为单独的 career/项目条目加入
             if numbered_re.search(p_text) or re.search(r'项目|业绩|完成|成果', p_text, re.I):
                 extra_careers.append(p_text)
-    # 用提取出的条目替换原有 careers（去重）
+    # 用提取出的条目与原有条目合并，确保未包含业绩/项目标记的原始 career 不会被丢失
     if extra_careers:
-        # 将原有没有被拆分的 career 中未出现的项也保留
-        # 但更简单的策略是用 extra_careers 替换 result.careers 中对应项
-        result.careers = clean_list(extra_careers)
+        merged = []
+        for orig in result.careers:
+            parts = project_split_re.split(orig)
+            # 如果没有被拆分，保留原始块
+            if len(parts) <= 1:
+                merged.append(orig)
+                continue
+            # 否则，保留主段并把业绩/项目段单独加入
+            main = parts[0].strip()
+            if main:
+                merged.append(main)
+            for part in parts[1:]:
+                p_text = part.strip()
+                if not p_text:
+                    continue
+                if numbered_re.search(p_text) or re.search(r'项目|业绩|完成|成果', p_text, re.I):
+                    merged.append(p_text)
+        # 将可能从其他 blocks 提取到的 extra_careers 也合并进来（覆盖或补充）
+        for ec in extra_careers:
+            if ec and ec not in merged:
+                merged.append(ec)
+        result.careers = clean_list(merged)
 
     # 启发式结构化拆分（尽量提取 company/title/period/responsibilities/technologies）
     def split_career_block(block: str) -> Dict[str, Any]:
@@ -516,9 +581,46 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
             return item
         # 第一行若包含公司关键词，则作为 company 或 title
         first = lines[0]
+        # 预定义用于解析 period/title/tech 的正则，确保在函数任何分支都可用
+        period_re = re.compile(r'(\d{4}[\.\-年]?\d{0,2})\s*[-—–到至]\s*(\d{4}[\.\-年]?\d{0,2}|至今)', re.I)
+        title_re = re.compile(r'(职位|职务|软件|工程师|主管|经理|技术|开发|负责人|专家)', re.I)
+        tech_regex_local = re.compile(r'\b(Python|Java|C\+\+|C#|Go|Golang|Django|Flask|Docker|Kubernetes|FPGA|WiFi|BT|5G|4G|SMF)\b', re.I)
+        # 清理 company 字段：去掉页码/长随机串/重复标记等噪声
+        def clean_company_name(name: str) -> str:
+            if not name:
+                return None
+            n = name.strip()
+            # 删除明显的页码/页眉标记
+            n = re.sub(r'第\s*\d+\s*页\s*共\s*\d+\s*页', '', n)
+            n = re.sub(r'第\s*\d+\s*页', '', n)
+            # 删除长混合 ID
+            n = re.sub(r'[A-Za-z0-9_\-]{12,}', '', n)
+            # 删除重复的分隔符和不可见字符
+            n = re.sub(r'[~]{2,}', '', n)
+            n = n.replace('\u200b', '')
+            n = n.strip()
+            return n or None
+
         if re.search(r'公司|有限公司|科技|集团|股份', first):
-            item['company'] = first
-            rest = lines[1:]
+            # 如果同一行还包含日期或职位，尝试按分隔符拆分（例如："公司名 职位 2018.09-2021.09"）
+            # 先检查是否有日期片段
+            inline_period = period_re.search(first)
+            # 使用更宽松的分割：基于多空格或多个连续空白/中英文标点
+            parts_inline = re.split(r'[，,\-\s]{2,}|\s+\|\s+|\s+•\s+|\s+-\s+', first)
+            # 如果分割后第一部分包含公司关键词，作为 company，其余尝试作为 title/period
+            if parts_inline and re.search(r'公司|有限公司|科技|集团|股份', parts_inline[0], re.I):
+                item['company'] = clean_company_name(parts_inline[0])
+                # 如果第二部分看起来像职位，则填 title
+                if len(parts_inline) > 1 and re.search(r'(工程师|主管|经理|开发|技术|专家|高级|软件)', parts_inline[1], re.I):
+                    item['title'] = parts_inline[1].strip()
+                # 如果行中有日期则填 period
+                pm_inline = re.search(r'(\d{4}[\.\-年]?\d{0,2})\s*[-—–到至]\s*(?:\d{4}[\.\-年]?\d{0,2}|至今)', first)
+                if pm_inline:
+                    item['period'] = pm_inline.group(0)
+                rest = lines[1:]
+            else:
+                item['company'] = clean_company_name(first)
+                rest = lines[1:]
         else:
             # 尝试用行内模式提取 title 与 company
             # 例如: "哲库（ZEKU）科技上海有限公司\n软件开发（高级主管工程师） 2022.12-至今"
@@ -528,8 +630,7 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
             else:
                 rest = lines
 
-        # 查找 period（形如 2022.12-至今 或 2018.09-2021.09）
-        period_re = re.compile(r'(\d{4}[\.\-年]?\d{0,2})\s*[-—–到至]\s*(\d{4}[\.\-年]?\d{0,2}|至今)', re.I)
+    # period_re 已在上方定义
         title_re = re.compile(r'(职位|职务|软件|工程师|主管|经理|技术|开发|负责人|专家)', re.I)
         tech_regex_local = re.compile(r'\b(Python|Java|C\+\+|C#|Go|Golang|Django|Flask|Docker|Kubernetes|FPGA|WiFi|BT|5G|4G|SMF)\b', re.I)
         # 先把整个块传给 NER（若可用），以获取 ORG/DATE/PER 提示
@@ -550,7 +651,7 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
                 if not w:
                     continue
                 if g and g.upper() in ('ORG', 'ORGANIZATION') and not item['company']:
-                    item['company'] = w
+                    item['company'] = clean_company_name(w)
                 if g and g.upper() in ('PER', 'PERSON') and not result.name:
                     result.name = w
                 if g and g.upper() in ('DATE', 'TIME') and not item['period']:
@@ -576,11 +677,33 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
 
         # 简单去重
         item['technologies'] = list(dict.fromkeys(item['technologies']))
+        # 进一步标准化 company 名称
+        if item.get('company'):
+            item['company'] = clean_company_name(item['company'])
         return item
 
     # 构建结构化列表（对所有 careers 进行结构化拆分）
+    # 对于没有 company 字段的碎片（通常是职责/业绩段），合并到上一条有 company 的记录中
     for c in result.careers:
-        result.careers_struct.append(split_career_block(c))
+        item = split_career_block(c)
+        if item.get('company') is None and result.careers_struct:
+            prev = result.careers_struct[-1]
+            # 如果当前片段有 title 且前一条没有 title，则填充为 title；否则把 title 当作一条职责插入
+            if item.get('title'):
+                if not prev.get('title'):
+                    prev['title'] = item['title']
+                else:
+                    prev.setdefault('responsibilities', []).append(item['title'])
+            # 合并职责
+            if item.get('responsibilities'):
+                prev.setdefault('responsibilities', []).extend(item.get('responsibilities'))
+            # 合并 period（只有当 prev 没有 period 时才填充）
+            if item.get('period') and not prev.get('period'):
+                prev['period'] = item.get('period')
+            # 合并技术栈并去重
+            prev['technologies'] = list(dict.fromkeys((prev.get('technologies') or []) + (item.get('technologies') or [])))
+        else:
+            result.careers_struct.append(item)
     for e in result.education:
         result.education_struct.append({'raw': e})
 

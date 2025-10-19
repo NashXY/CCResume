@@ -45,7 +45,18 @@ class ResumeInputHandler:
         except Exception as e:
             parsed = {"name": None, "age": None, "phone": None, "careers": [], "education": [], "error": f"parse_failed: {str(e)}"}
 
+        # 如果有提取错误，确保 parsed 是可下标赋值的 dict，然后附加 error 信息
         if extraction_error:
+            if not isinstance(parsed, dict):
+                try:
+                    from dataclasses import asdict
+                    parsed = asdict(parsed)
+                except Exception:
+                    try:
+                        parsed = parsed.to_dict()
+                    except Exception:
+                        # 作为最后手段，覆盖为包含 error 的 dict
+                        parsed = {"name": None, "age": None, "phone": None, "careers": [], "education": [], "error": extraction_error}
             parsed['error'] = extraction_error
 
         return parsed
