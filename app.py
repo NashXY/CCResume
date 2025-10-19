@@ -83,14 +83,27 @@ def resume_input_ajax():
         texts = []
         print(f"[ResumeInput]拖拽简历 saved_paths: {saved_paths}")
         try:
-            if hasattr(handler, 'PerformDragResume'):
-                txt = handler.PerformDragResume(saved_paths[0])
-                texts.append(txt)
+            if hasattr(handler, 'PerformDragResume') and saved_paths:
+                parsed = handler.PerformDragResume(saved_paths[0])
+                # 如果返回的是 dataclass（ResumeParseResult），将其转为字典以便 JSON 序列化
+                try:
+                    from dataclasses import asdict
+                    parsed_dict = asdict(parsed) if not isinstance(parsed, dict) else parsed
+                except Exception:
+                    # 不是 dataclass 或转换失败，直接使用原值
+                    parsed_dict = parsed
+                texts.append(parsed_dict)
+                # 也在顶层返回 parsed，以便前端直接读取（兼容旧客户端）
+                parsed_top = parsed_dict
         except Exception:
             app.logger.exception('Error while performing drag resume')
             texts.append(None)
 
-        return jsonify(ok=True, filenames=saved_names, texts=texts)
+        # 如果存在解析结果，把第一个作为 top-level parsed
+        parsed_return = None
+        if texts:
+            parsed_return = texts[0]
+        return jsonify(ok=True, filenames=saved_names, texts=texts, parsed=parsed_return)
     except Exception:
         app.logger.exception('Unhandled exception in resume_input_ajax')
         return jsonify(ok=False, error='internal_error'), 500

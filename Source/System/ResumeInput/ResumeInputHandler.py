@@ -1,4 +1,5 @@
 import os
+from Source.Utils.ResumeParseUtils import ResumeParse, ResumeParseResult
 
 class ResumeInputHandler:
     # 处理拖拽上传的简历
@@ -9,33 +10,47 @@ class ResumeInputHandler:
         _, ext = os.path.splitext(file_path)
         ext = ext.lower()
         text = ''
+        extraction_error = None
         try:
             if ext == '.docx':
                 try:
                     import docx
                 except Exception:
-                    return f"(无法解析 .docx：缺少 python-docx 库) {os.path.basename(file_path)}"
-                doc = docx.Document(file_path)
-                paragraphs = [p.text for p in doc.paragraphs if p.text]
-                text = '\n'.join(paragraphs)
+                    extraction_error = f"missing_python_docx: {os.path.basename(file_path)}"
+                else:
+                    doc = docx.Document(file_path)
+                    paragraphs = [p.text for p in doc.paragraphs if p.text]
+                    text = '\n'.join(paragraphs)
             elif ext == '.pdf':
                 try:
                     import PyPDF2
                 except Exception:
-                    return f"(无法解析 .pdf：缺少 PyPDF2 库) {os.path.basename(file_path)}"
-                with open(file_path, 'rb') as fh:
-                    reader = PyPDF2.PdfReader(fh)
-                    parts = []
-                    for page in reader.pages:
-                        parts.append(page.extract_text() or '')
-                    text = '\n'.join(parts)
+                    extraction_error = f"missing_pypdf2: {os.path.basename(file_path)}"
+                else:
+                    with open(file_path, 'rb') as fh:
+                        reader = PyPDF2.PdfReader(fh)
+                        parts = []
+                        for page in reader.pages:
+                            parts.append(page.extract_text() or '')
+                        text = '\n'.join(parts)
             else:
-                return f"(不支持的文件类型) {os.path.basename(file_path)}"
+                extraction_error = f"unsupported_type: {os.path.basename(file_path)}"
         except Exception as e:
-            return f"(解析出错) {str(e)}"
-        print(f"[ResumeInput]执行简历拖拽，text: {text[:30]}...")
-        return text or f"(未能提取文本) {os.path.basename(file_path)}"
+            extraction_error = f"parse_exception: {str(e)}"
+
+        print(f"[ResumeInput]执行简历拖拽，text: {text[:30]}... error={extraction_error}")
+        # 始终返回 ResumeParse 的结构化结果；若提取出错，在返回值中附加 error 字段
+        try:
+            parsed = ResumeParse(text)
+        except Exception as e:
+            parsed = {"name": None, "age": None, "phone": None, "projects": [], "education": [], "error": f"parse_failed: {str(e)}"}
+
+        if extraction_error:
+            parsed['error'] = extraction_error
+
+        return parsed
 
     # 处理表单提交
     def PerformSubmit(self, file_path):
         print(f"Processing submission with file: {file_path}")
+        

@@ -119,7 +119,7 @@
 					const resp = await fetch('/ResumeInput/ajax', { method: 'POST', body: fd });
 					let data = null;
 					const ct = resp.headers.get('content-type') || '';
-					if(ct.includes('application/json')){
+					if (ct.includes('application/json')) {
 						data = await resp.json();
 					} else {
 						// 非 JSON（可能是 HTML 错误页面），把文本作为错误信息
@@ -131,7 +131,39 @@
 						fileList.appendChild(errEl);
 						return;
 					}
-					status.textContent = '';
+
+					// 现在 data 已经被解析，安全地访问 parsed
+					let parsed = null;
+					if (data && data.parsed) parsed = data.parsed;
+					else if (data && data.texts && data.texts.length>0) parsed = data.texts[0];
+
+					if (parsed && typeof parsed === 'object'){
+						// 填姓名、年龄、联系方式、邮箱
+						const nameEl = document.getElementById('name');
+						const ageEl = document.getElementById('age');
+						const contactEl = document.getElementById('contact');
+						const emailEl = document.getElementById('email');
+						if(nameEl && parsed.name) nameEl.value = parsed.name;
+						if(ageEl && parsed.age) ageEl.value = parsed.age;
+						if(contactEl && parsed.phone) contactEl.value = parsed.phone;
+						if(emailEl && parsed.email) emailEl.value = parsed.email;
+
+						// projects -> 填到工作经历 textarea（追加或覆盖取决于需求）
+						const workEl = document.getElementById('work');
+						if(workEl && parsed.projects && Array.isArray(parsed.projects) && parsed.projects.length>0){
+							const joined = parsed.projects.join('\n\n-----\n\n');
+							if(workEl.value && workEl.value.trim().length>0) workEl.value = workEl.value + '\n\n' + joined;
+							else workEl.value = joined;
+						}
+
+						// education -> 填到教育经历 textarea
+						const eduEl = document.getElementById('edu');
+						if(eduEl && parsed.education && Array.isArray(parsed.education) && parsed.education.length>0){
+							const joinedEdu = parsed.education.join('\n\n');
+							if(eduEl.value && eduEl.value.trim().length>0) eduEl.value = eduEl.value + '\n\n' + joinedEdu;
+							else eduEl.value = joinedEdu;
+						}
+					}
 					if(resp.ok && data.ok){
 						const okEl = document.createElement('div');
 						okEl.style.color = '#065f46';
