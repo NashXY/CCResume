@@ -23,7 +23,13 @@
 <body>
 	<div class="container">
 		<h2>简历录入</h2>
-		<form id="resumeForm" method="post" action="#" enctype="multipart/form-data">
+		<form id="resumeForm" method="post" action="/ResumeInput" enctype="multipart/form-data">
+			{% if success %}
+			<div style="padding:10px; background:#ecfdf5; border:1px solid #10b981; color:#065f46; border-radius:6px; margin-bottom:10px">提交成功</div>
+			{% endif %}
+			{% if error %}
+			<div style="padding:10px; background:#fff1f2; border:1px solid #fb7185; color:#7f1d1d; border-radius:6px; margin-bottom:10px">上传的文件格式不被允许，请上传 PDF 或 DOC/DOCX 文件</div>
+			{% endif %}
 			<label for="name">姓名</label>
 			<input id="name" name="name" type="text" placeholder="请输入姓名" />
 
@@ -59,7 +65,7 @@
 				<label>上传简历或附件（支持拖拽）</label>
 				<div id="dropZone" class="files-drop">
 					<div class="hint">将文件拖到此处，或点击选择文件</div>
-					<input id="fileInput" type="file" name="files" multiple style="display:none" />
+					<input id="fileInput" type="file" name="file" accept=".pdf,.doc,.docx" style="display:none" />
 					<div id="fileList" class="file-list"></div>
 				</div>
 			</div>
@@ -86,22 +92,102 @@
 		dropZone.addEventListener('dragleave', (e) => {
 			dropZone.classList.remove('dragover');
 		});
-		dropZone.addEventListener('drop', (e) => {
+		dropZone.addEventListener('drop', async (e) => {
 			e.preventDefault();
 			dropZone.classList.remove('dragover');
-			const files = Array.from(e.dataTransfer.files);
-			// 设置到 fileInput（不可直接设置 files），但我们可以显式显示
-			updateList(files);
+			const dtFiles = Array.from(e.dataTransfer.files);
+			// 只取第一个文件（单文件上传）
+			const first = dtFiles[0] ? dtFiles.slice(0,1) : [];
+			try {
+				const dataTransfer = new DataTransfer();
+				if(first[0]) dataTransfer.items.add(first[0]);
+				fileInput.files = dataTransfer.files;
+			} catch (err) {
+				console.warn('Cannot assign files to file input programmatically', err);
+			}
+			updateList(first);
+
+			// 使用 AJAX 将整个表单（包括文件）提交到 /ResumeInput/ajax
+			if(first.length > 0){
+				const formEl = document.getElementById('resumeForm');
+				const fd = new FormData(formEl);
+				// 可选：显示上传中提示
+				const status = document.createElement('div');
+				status.textContent = '上传中...';
+				fileList.appendChild(status);
+				try{
+					const resp = await fetch('/ResumeInput/ajax', { method: 'POST', body: fd });
+					let data = null;
+					const ct = resp.headers.get('content-type') || '';
+					if(ct.includes('application/json')){
+						data = await resp.json();
+					} else {
+						// 非 JSON（可能是 HTML 错误页面），把文本作为错误信息
+						const txt = await resp.text();
+						status.textContent = '';
+						const errEl = document.createElement('div');
+						errEl.style.color = '#b91c1c';
+						errEl.textContent = '服务器返回非 JSON 响应：' + (txt.slice(0,200) + (txt.length>200? '...':''));
+						fileList.appendChild(errEl);
+						return;
+					}
+					status.textContent = '';
+					if(resp.ok && data.ok){
+						const okEl = document.createElement('div');
+						okEl.style.color = '#065f46';
+						okEl.textContent = '上传成功: ' + (data.filenames ? data.filenames.join(', ') : first[0].name);
+						fileList.appendChild(okEl);
+						// 如果后端返回了解析文本（texts），把它们填入工作经历 textarea
+						if(data.texts && data.texts.length > 0){
+							const workEl = document.getElementById('work');
+							const joined = data.texts.filter(Boolean).join('\n\n-----\n\n');
+							// 将解析文本追加到现有内容末尾（若需要覆盖改为 = joined）
+							if(workEl){
+								if(workEl.value && workEl.value.trim().length > 0){
+									workEl.value = workEl.value + '\n\n' + joined;
+								} else {
+									workEl.value = joined;
+								}
+							}
+						}
+					} else {
+						const errEl = document.createElement('div');
+						errEl.style.color = '#b91c1c';
+						errEl.textContent = '上传失败: ' + (data.error || resp.statusText || '未知错误');
+						fileList.appendChild(errEl);
+					}
+				}catch(err){
+					status.textContent = '';
+					const errEl = document.createElement('div');
+					errEl.style.color = '#b91c1c';
+					errEl.textContent = '上传请求失败: ' + err.message;
+					fileList.appendChild(errEl);
+				}
+			}
 		});
 
+		const submitBtn = document.querySelector('button[type="submit"]');
+
 		function updateList(files){
-			if(!files || files.length === 0){ fileList.innerHTML = '<div class="hint">未选择文件</div>'; return; }
+			const allowed = ['.pdf','.doc','.docx'];
+			if(!files || files.length === 0){ fileList.innerHTML = '<div class="hint">未选择文件</div>'; submitBtn.disabled = false; return; }
+			const f = files[0];
 			fileList.innerHTML = '';
-			files.forEach(f => {
-				const el = document.createElement('div');
-				el.textContent = f.name + ' (' + Math.round(f.size/1024) + ' KB)';
-				fileList.appendChild(el);
-			});
+			const el = document.createElement('div');
+			el.textContent = f.name + ' (' + Math.round(f.size/1024) + ' KB)';
+			fileList.appendChild(el);
+			const idx = f.name.lastIndexOf('.');
+			const ext = idx >= 0 ? f.name.slice(idx).toLowerCase() : '';
+			if(!allowed.includes(ext)){
+				const warn = document.createElement('div');
+				warn.style.color = '#b91c1c';
+				warn.style.marginTop = '8px';
+				warn.textContent = '文件格式不被允许：' + f.name;
+				fileList.appendChild(warn);
+				submitBtn.disabled = true;
+			} else {
+				submitBtn.disabled = false;
+			}
 		}
 
 		// 初始化为空提示
