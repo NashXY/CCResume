@@ -13,6 +13,7 @@ class ResumeParseResult:
     age: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    careers: List[str] = field(default_factory=list)
     projects: List[str] = field(default_factory=list)
     education: List[str] = field(default_factory=list)
 
@@ -122,7 +123,10 @@ def ResumeParse(text: str) -> ResumeParseResult:
     blocks = []
     current = []
     current_header = None
+    # 公司行识别（若单独一行出现公司名，应作为新的块边界）
+    company_line_re = re.compile(r'^[\s\S]*?(公司|有限公司|科技|集团|股份)[\s\S]*$', re.I)
     for ln in lines_for_blocks:
+        # 如果这一行是章节标题，开启新块
         if header_re.match(ln.strip()):
             # 开始新的块：先把现有块推入
             if current:
@@ -130,6 +134,13 @@ def ResumeParse(text: str) -> ResumeParseResult:
                 current = []
             # 把标题也作为块的首行
             current.append(ln.strip())
+            current_header = ln.strip()
+            continue
+        # 如果这一行看起来像单独的公司名行，作为块边界（把当前块推入并以该行为新块首行）
+        if company_line_re.match(ln.strip()) and (not ln.strip().startswith('项目') and not ln.strip().startswith('教育')):
+            if current:
+                blocks.append('\n'.join(current).strip())
+            current = [ln.strip()]
             current_header = ln.strip()
             continue
         # 普通行追加到当前块
@@ -215,6 +226,7 @@ def ResumeParse(text: str) -> ResumeParseResult:
     # 预编译标题匹配用于直接归类
     project_header_re = re.compile(r'^(项目经验|项目经历|项目)\b', re.I)
     education_header_re = re.compile(r'^(教育经历|教育背景|教育)\b', re.I)
+    career_header_re = re.compile(r'^(工作经历|工作经验|职业经历|任职|公司)\b', re.I)
 
     for block in blocks:
         # 如果块以项目/教育标题开头，直接归类，避免关键字稀释或误判
@@ -229,6 +241,12 @@ def ResumeParse(text: str) -> ResumeParseResult:
             body = '\n'.join(block.splitlines()[1:]).strip()
             if body:
                 result.education.append(body)
+            continue
+        if career_header_re.match(first_line):
+            # 去掉标题行，整块作为 career 条目（职业/公司经历）
+            body = '\n'.join(block.splitlines()[1:]).strip()
+            if body:
+                result.careers.append(body)
             continue
         # 先剥离块前面的元信息行
         block = strip_leading_meta_lines(block)
@@ -245,10 +263,16 @@ def ResumeParse(text: str) -> ResumeParseResult:
             result.education.append(block)
             continue
 
+        # 判为 career（职业/公司经历）：包含公司/任职/职位/工作地点等关键词且篇幅较长
+        if (sc['work'] >= 2 or re.search(r'公司|任职|职位|工作地点|职责|业绩', block, re.I)):
+            result.careers.append(block)
+            continue
+
         # 判为 project 的额外要求：要么有项目关键词/职责/业绩等，要么包含技术关键词
         has_project_keywords = any(re.search(kw, block, re.I) for kw in [r'项目', r'项目经验', r'职责', r'业绩', r'完成', r'负责'])
         tech_count = len(tech_regex.findall(block))
-        if (sc['project'] >= 2 and (has_project_keywords or tech_count > 0)) or (sc['work'] >= 2 and sc['project'] >= 1 and tech_count > 0):
+        if (sc['project'] >= 2 and (has_project_keywords or tech_count > 0)):
+            # 明确为项目段
             result.projects.append(block)
             continue
 
@@ -266,10 +290,9 @@ def ResumeParse(text: str) -> ResumeParseResult:
                 out.append(t)
         return out
 
+    result.careers = clean_list(result.careers)
     result.projects = clean_list(result.projects)
     result.education = clean_list(result.education)
-    
-    print(f"[ResumeParseUtils]ResumeParse结果: {result}")
 
     return result
 

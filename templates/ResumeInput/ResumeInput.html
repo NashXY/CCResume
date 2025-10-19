@@ -43,9 +43,15 @@
 			<input id="email" name="email" type="email" placeholder="example@mail.com" />
 
 			<div class="section">
-				<h3>工作经历</h3>
-				<label for="work">工作经历描述</label>
-				<textarea id="work" name="work" placeholder="时间 - 职位 - 工作内容（多行）"></textarea>
+				<h3>职业经历</h3>
+				<label for="career">职业经历描述</label>
+				<textarea id="career" name="career" placeholder="时间 - 职位 - 工作内容（多行）"></textarea>
+			</div>
+
+			<div class="section">
+				<h3>项目经历</h3>
+				<label for="projects">项目经历描述</label>
+				<textarea id="projects" name="projects" placeholder="项目名 - 角色 - 主要职责/技术（多行）"></textarea>
 			</div>
 
 			<div class="section">
@@ -141,12 +147,20 @@
 						if(contactEl && parsed.phone) contactEl.value = parsed.phone;
 						if(emailEl && parsed.email) emailEl.value = parsed.email;
 
-						// projects -> 填到工作经历 textarea（追加或覆盖取决于需求）
-						const workEl = document.getElementById('work');
-						if(workEl && parsed.projects && Array.isArray(parsed.projects) && parsed.projects.length>0){
-							const joined = parsed.projects.join('\n\n-----\n\n');
-							if(workEl.value && workEl.value.trim().length>0) workEl.value = workEl.value + '\n\n' + joined;
-							else workEl.value = joined;
+						// parsed.careers -> 填到职业经历 textarea（追加或覆盖）
+						const careerEl = document.getElementById('career');
+						if(careerEl && parsed.careers && Array.isArray(parsed.careers) && parsed.careers.length>0){
+							const joinedCareer = parsed.careers.join('\n\n-----\n\n');
+							if(careerEl.value && careerEl.value.trim().length>0) careerEl.value = careerEl.value + '\n\n' + joinedCareer;
+							else careerEl.value = joinedCareer;
+						}
+
+						// parsed.projects -> 填到项目经历 textarea
+						const projectsEl = document.getElementById('projects');
+						if(projectsEl && parsed.projects && Array.isArray(parsed.projects) && parsed.projects.length>0){
+							const joinedProjects = parsed.projects.join('\n\n-----\n\n');
+							if(projectsEl.value && projectsEl.value.trim().length>0) projectsEl.value = projectsEl.value + '\n\n' + joinedProjects;
+							else projectsEl.value = joinedProjects;
 						}
 
 						// education -> 填到教育经历 textarea
@@ -164,14 +178,14 @@
 						fileList.appendChild(okEl);
 						// 如果后端返回了解析文本（texts），把它们填入工作经历 textarea
 						if(data.texts && data.texts.length > 0){
-							const workEl = document.getElementById('work');
+							const careerEl = document.getElementById('career');
 							const joined = data.texts.filter(Boolean).join('\n\n-----\n\n');
-							// 将解析文本追加到现有内容末尾（若需要覆盖改为 = joined）
-							if(workEl){
-								if(workEl.value && workEl.value.trim().length > 0){
-									workEl.value = workEl.value + '\n\n' + joined;
+							// 将解析文本追加到职业经历（若需要覆盖改为 = joined）
+							if(careerEl){
+								if(careerEl.value && careerEl.value.trim().length > 0){
+									careerEl.value = careerEl.value + '\n\n' + joined;
 								} else {
-									workEl.value = joined;
+									careerEl.value = joined;
 								}
 							}
 						}
