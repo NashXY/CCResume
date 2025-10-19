@@ -111,6 +111,8 @@ def ResumeParse(text: str) -> ResumeParseResult:
 
     result.projects = clean_list(result.projects)
     result.education = clean_list(result.education)
+    
+    print(f"[ResumeParseUtils]ResumeParse结果: {result}")
 
     return result
 
