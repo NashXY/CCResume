@@ -22,17 +22,31 @@ class ResumeInputHandler:
                     paragraphs = [p.text for p in doc.paragraphs if p.text]
                     text = '\n'.join(paragraphs)
             elif ext == '.pdf':
+                # 尝试 PyPDF2 提取；若不可用，回退到 pdfplumber
+                tried = False
                 try:
                     import PyPDF2
-                except Exception:
-                    extraction_error = f"missing_pypdf2: {os.path.basename(file_path)}"
-                else:
+                    tried = True
                     with open(file_path, 'rb') as fh:
                         reader = PyPDF2.PdfReader(fh)
                         parts = []
                         for page in reader.pages:
                             parts.append(page.extract_text() or '')
                         text = '\n'.join(parts)
+                except Exception:
+                    # 回退到 pdfplumber（更健壮于一些 PDF）
+                    try:
+                        import pdfplumber
+                        with pdfplumber.open(file_path) as pdf:
+                            parts = []
+                            for p in pdf.pages:
+                                txt = p.extract_text() or ''
+                                parts.append(txt)
+                            text = '\n'.join(parts)
+                        tried = True
+                    except Exception:
+                        if not tried:
+                            extraction_error = f"missing_pypdf2_or_pdfplumber: {os.path.basename(file_path)}"
             else:
                 extraction_error = f"unsupported_type: {os.path.basename(file_path)}"
         except Exception as e:
