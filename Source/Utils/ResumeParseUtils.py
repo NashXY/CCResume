@@ -26,8 +26,45 @@ def ResumeParse(text: str) -> ResumeParseResult:
         return ResumeParseResult()
 
     s = _normalize(text)
-    # 以空行为块分割
-    blocks = [b.strip() for b in re.split(r"\n\s*\n+", s) if b.strip()]
+    # 先清洗常见噪声：页眉/页脚（第1页共7页 等）、长的十六进制或重复编码串、纯符号行等
+    # 删除典型的页码标记
+    s = re.sub(r'第\s*\d+\s*页\s*共\s*\d+\s*页', '', s)
+    s = re.sub(r'第\s*\d+\s*页', '', s)
+    s = re.sub(r'共\s*\d+\s*页', '', s)
+    s = re.sub(r'Page\s*\d+', '', s, flags=re.I)
+    # 去掉长的十六进制/随机串（例如 OCR/导出残留）
+    s = re.sub(r'[A-Fa-f0-9]{16,}', '', s)
+    # 去掉连续的 ~ 或特殊分隔符
+    s = re.sub(r'~{2,}', '', s)
+
+    # 按行过滤明显噪声行
+    lines = [ln for ln in s.splitlines()]
+    clean_lines = []
+    long_hex_re = re.compile(r'[A-Fa-f0-9]{12,}')
+    page_re = re.compile(r'第\s*\d+\s*页|共\s*\d+\s*页|Page\s*\d+', re.I)
+    punct_re = re.compile(r'^[\W_~]+$')
+    for ln in lines:
+        t = ln.strip()
+        if not t:
+            clean_lines.append('')
+            continue
+        # 如果包含页码、长十六进制串或是纯符号行，则跳过
+        if page_re.search(t):
+            continue
+        if long_hex_re.search(t):
+            # 这一类通常是导出残留或加密串，丢弃
+            continue
+        if punct_re.match(t) and len(t) > 4:
+            continue
+        # 如果行过短且不包含中文/字母数字，跳过
+        if len(t) < 4 and not re.search(r'[\u4e00-\u9fffA-Za-z0-9]', t):
+            continue
+        clean_lines.append(t)
+
+    s_clean = '\n'.join(clean_lines)
+
+    # 以空行为块分割（用清洗后的文本）
+    blocks = [b.strip() for b in re.split(r"\n\s*\n+", s_clean) if b.strip()]
 
     result = ResumeParseResult()
 
@@ -86,17 +123,23 @@ def ResumeParse(text: str) -> ResumeParseResult:
         p += tech_count
         return {"project": p, "education": e, "work": w}
 
+    # 只把满足一定条件的块归为 projects/education，过滤残余噪声块
     for block in blocks:
         sc = score_block(block)
+        # 要判为 education，需要 education 特征明显
         if sc['education'] >= 3:
             result.education.append(block)
-        elif sc['project'] >= 2:
+            continue
+
+        # 判为 project 的额外要求：要么有项目关键词/职责/业绩等，要么包含技术关键词
+        has_project_keywords = any(re.search(kw, block, re.I) for kw in [r'项目', r'项目经验', r'职责', r'业绩', r'完成', r'负责'])
+        tech_count = len(tech_regex.findall(block))
+        if (sc['project'] >= 2 and (has_project_keywords or tech_count > 0)) or (sc['work'] >= 2 and sc['project'] >= 1 and tech_count > 0):
             result.projects.append(block)
-        elif sc['work'] >= 2 and sc['project'] >= 1:
-            result.projects.append(block)
-        else:
-            # fallback: 忽略
-            pass
+            continue
+
+        # 其余视为非目标块，忽略
+        continue
 
     # 去重
     def clean_list(lst: List[str]) -> List[str]:
