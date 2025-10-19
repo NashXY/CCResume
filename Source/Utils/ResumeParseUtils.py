@@ -61,22 +61,53 @@ def ResumeParse(text: str) -> ResumeParseResult:
             continue
         clean_lines.append(t)
 
-    s_clean = '\n'.join(clean_lines)
+    # 在分块前，先从清洗后的前几行中尝试提取姓名（以保留原始header信息用于姓名提取）
+    header_candidate = '\n'.join([ln for ln in clean_lines if ln.strip()][:6])
 
-    # 以空行为块分割（用清洗后的文本）
-    blocks = [b.strip() for b in re.split(r"\n\s*\n+", s_clean) if b.strip()]
-
+    # 提取中文或英文姓名（优先尝试中文）
     result = ResumeParseResult()
-
-    # header 探测
-    header = "\n".join(blocks[:2]) if blocks else ""
-    zh_name = re.search(r'([\u4e00-\u9fa5]{2,4})', header)
+    zh_name = re.search(r'([\u4e00-\u9fa5]{2,4})', header_candidate)
     if zh_name:
         result.name = zh_name.group(1)
     else:
-        en_name = re.search(r'([A-Z][a-z]+\s+[A-Z][a-z]+)', header)
+        en_name = re.search(r'([A-Z][a-z]+\s+[A-Z][a-z]+)', header_candidate)
         if en_name:
             result.name = en_name.group(1)
+
+    # 现在从清洗后的行里剥离明显的个人信息行，避免它们被当作工作/项目块
+    personal_line_re_list = [
+        re.compile(r'年龄[:：]?\s*\d{1,3}\b', re.I),
+        re.compile(r'^\s*(男|女)\s*$', re.I),
+        re.compile(r'性别[:：]', re.I),
+        re.compile(r'手机[:：]?|电话[:：]?|微信[:：]?', re.I),
+        re.compile(r'邮箱|@', re.I),
+        re.compile(r'户籍|居住地|婚姻|基本资料', re.I),
+        re.compile(r'目前公司|现公司|现任|目前职位|职位[:：]', re.I),
+    ]
+
+    filtered_lines = []
+    for ln in clean_lines:
+        t = ln.strip()
+        if not t:
+            filtered_lines.append('')
+            continue
+        # 如果这一行明显是个人信息且长度较短（通常是 header 行），则剥离掉
+        is_personal = False
+        for cre in personal_line_re_list:
+            if cre.search(t) and len(t) < 120:
+                is_personal = True
+                break
+        if is_personal:
+            # 跳过这类行，不加入用于块分割的文本
+            continue
+        filtered_lines.append(t)
+
+    s_clean = '\n'.join(filtered_lines)
+
+    # 以空行为块分割（用清洗并剥离个人信息后的文本）
+    blocks = [b.strip() for b in re.split(r"\n\s*\n+", s_clean) if b.strip()]
+
+
 
     # phone 和 age
     # email
@@ -124,7 +155,39 @@ def ResumeParse(text: str) -> ResumeParseResult:
         return {"project": p, "education": e, "work": w}
 
     # 只把满足一定条件的块归为 projects/education，过滤残余噪声块
+    def strip_leading_meta_lines(block: str) -> str:
+        """去掉块开头的短个人/公司/职位元信息行，例如：姓名+性别、公司名、职位行、工作地点等。"""
+        lines = [l for l in block.splitlines() if l.strip()]
+        if not lines:
+            return ''
+        # 模式：姓名+性别（如 蒋大伟男）
+        name_gender_re = re.compile(r'^[\u4e00-\u9fa5]{2,4}\s*(男|女)$')
+        # 公司行模式（含 公司 有限公司 科技 集团 等）
+        company_re = re.compile(r'(公司|有限公司|科技|集团|股份|有限|Inc|LLC)', re.I)
+        # 职位/职称/工作地点/时间段 行
+        title_re = re.compile(r'(职位|软件|工程师|主管|责任|工作地点|至今|\d{4}[-年])', re.I)
+
+        # 连续剥离前几行，只要它们匹配元信息模式且较短
+        i = 0
+        while i < len(lines) and i < 4:
+            ln = lines[i].strip()
+            if len(ln) < 120 and (name_gender_re.search(ln) or company_re.search(ln) or title_re.search(ln)):
+                i += 1
+                continue
+            break
+        if i > 0:
+            return '\n'.join(lines[i:]).strip()
+        return block
+
     for block in blocks:
+        # 先剥离块前面的元信息行
+        block = strip_leading_meta_lines(block)
+        if not block:
+            continue
+        # 如果块明显包含个人信息关键词且内容较短，跳过（避免被误判为工作经历）
+        personal_block_re = re.compile(r'(姓名|性别|手机|电话|微信|邮箱|年龄|婚姻|户籍|居住地|基本资料|目前公司|目前职位)', re.I)
+        if personal_block_re.search(block) and len(block) < 200:
+            continue
         sc = score_block(block)
         # 要判为 education，需要 education 特征明显
         if sc['education'] >= 3:
