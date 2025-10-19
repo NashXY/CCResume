@@ -171,6 +171,34 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
     result = ResumeParseResult() if 'result' not in locals() else result
     stop_words_for_name = set(['年龄', '性别', '个人优势', '求职意向', '期望薪资', '期望城市', '工作经验'])
     candidate_name = None
+    # 优先使用 transformers NER 在 header_candidate 上识别人名 (PER)
+    if _USE_TRANSFORMERS_NER:
+        try:
+            ner_pipe = _get_ner_pipeline()
+            if ner_pipe and header_candidate and re.search(r'[\u4e00-\u9fffA-Za-z]', header_candidate):
+                try:
+                    ents = ner_pipe(header_candidate)
+                except Exception:
+                    ents = []
+                # ents 可能为 [{'entity_group':'PER','word':'张三',...}, ...] 或 transformers 早期格式
+                if ents:
+                    for ent in ents:
+                        g = (ent.get('entity_group') or ent.get('entity') or '').upper()
+                        w = (ent.get('word') or ent.get('entity') or '').strip()
+                        if not w:
+                            continue
+                        if g in ('PER', 'PERSON', '人名'):
+                            # 优先接受 2-4 个汉字或常见 latin 名称（含空格或 .），避免把职位/公司误识别
+                            clean_w = re.sub(r'[^\u4e00-\u9fa5A-Za-z\s\.-]', '', w)
+                            # 验证 NER 输出不是乱码（例如包含替换字符）且至少含有合理汉字或英文字母
+                            if '\ufffd' in clean_w:
+                                continue
+                            if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', clean_w) or re.fullmatch(r'[A-Za-z\s\.-]{2,40}', clean_w):
+                                candidate_name = clean_w.strip()
+                                break
+        except Exception:
+            # 不阻塞，继续使用后续启发式方法
+            pass
     # 优先从 header_items 中找纯中文 2-4 字项（可能含性别尾缀）
     for it in header_items:
         if not it:
