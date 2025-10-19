@@ -280,12 +280,12 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
         r'^\s*教育经历\s*$', r'^\s*教育背景\s*$', r'^\s*教育\s*$',
         r'^\s*项目经验\s*$', r'^\s*项目经历\s*$', r'^\s*项目\s*$',
         r'^\s*工作经历\s*$', r'^\s*工作经验\s*$', r'^\s*职业经历\s*$',
-        r'^\s*实习经历\s*$', r'^\s*自我评价\s*$', r'^\s*主要技能\s*$',
+        r'^\s*实习经历\s*$', r'^\s*自我评价\s*$', r'^\s*主要技能\s*$', r'^\s*培训经历\s*$',
     ]
     header_re = re.compile('|'.join('(?:%s)' % p for p in header_patterns), re.I)
 
     # 更稳健的块拆分：基于章节 header 关键词把文本拆分为多个块（保留 header 行）
-    split_headers = r'教育经历|教育背景|教育|项目经验|项目经历|项目|工作经历|工作经验|职业经历|实习经历|自我评价|主要技能'
+    split_headers = r'教育经历|教育背景|教育|项目经验|项目经历|项目|工作经历|工作经验|职业经历|实习经历|自我评价|主要技能|培训经历|培训'
     # 使用多行模式，在 header 前进行拆分（保留 header 行作为新块首行）
     blocks = [b.strip() for b in re.split(r'(?m)(?=^\s*(?:' + split_headers + r')\b)', s_clean) if b.strip()]
     # 进一步，如果某个块本身为空，删除
@@ -474,6 +474,11 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
             continue
 
         sc = score_block(block)
+        # 如果块中包含学校/学院/大学/本科/硕士/学位/培训等关键词，优先判为 education
+        education_indicators = re.compile(r'(大学|学院|学校|本科|硕士|博士|学位|毕业|培训经历|培训机构|培训)', re.I)
+        if education_indicators.search(block):
+            result.education.append(block)
+            continue
         # 判为 career（职业/公司经历）：包含公司/任职/职位/工作地点等关键词且篇幅较长
         if (sc['work'] >= 2 or re.search(r'公司|任职|职位|工作地点|职责|业绩', block, re.I)):
             result.careers.append(block)
@@ -494,7 +499,7 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
         # 其余视为非目标块，忽略
         continue
 
-    # 启发式结构化拆分（尽量提取 company/title/period/responsibilities/technologies）
+        # 启发式结构化拆分（尽量提取 company/title/period/responsibilities/technologies）
     def split_career_block(block: str) -> Dict[str, Any]:
         lines = [l.strip() for l in block.splitlines() if l.strip()]
         item: Dict[str, Any] = { 'company': None, 'title': None, 'period': None, 'responsibilities': [], 'technologies': [] }
@@ -654,6 +659,17 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
         return item
 
     # 构建结构化列表（对所有 careers 进行结构化拆分）
+    # 去重/清理列表的辅助函数
+    def clean_list(lst: List[str]) -> List[str]:
+        out = []
+        seen = set()
+        for x in lst:
+            t = x.strip()
+            if t and t not in seen:
+                seen.add(t)
+                out.append(t)
+        return out
+
     # 先对碎片做一次预处理：把短段/编号段合并到其上一条 career（如果合适），以减少断裂
     merged_careers = []
     numbered_prefix_re = re.compile(r'^\s*(?:\d+[\.、\)\-]|\d+\.?\d+\s*\.|\(\d+\)|（\d+）)')
@@ -697,6 +713,21 @@ def ResumeParse(text: str, debug: bool = False) -> ResumeParseResult:
             result.careers_struct.append(item)
     for e in result.education:
         result.education_struct.append({'raw': e})
+
+    # 回退扫描：如果未识别到教育经历，从全文中查找包含学校/学院/本科/学位/培训等关键词的行
+    if not result.education:
+        edu_candidates = []
+        lines = [ln.strip() for ln in s_clean.splitlines() if ln.strip()]
+        for i, ln in enumerate(lines):
+            if re.search(r'(大学|学院|学校|本科|硕士|博士|学位)', ln, re.I):
+                # 合并相邻的时间/学位行
+                group = ln
+                if i+1 < len(lines) and re.search(r'\d{4}[\.\-年]', lines[i+1]):
+                    group = group + ' ' + lines[i+1]
+                edu_candidates.append(group)
+        if edu_candidates:
+            result.education = clean_list(edu_candidates)
+            result.education_struct = [{'raw': e} for e in result.education]
 
     return result
 
