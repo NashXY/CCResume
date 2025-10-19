@@ -2,20 +2,61 @@ import re
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 
+# 可选的中文分词/词性标注增强（jieba）
+try:
+    import jieba
+    import jieba.posseg as pseg
+    _HAS_JIEBA = True
+except Exception:
+    _HAS_JIEBA = False
+
+# 可选的 transformers-based NER（懒加载）
+_NER_PIPELINE = None
+_USE_TRANSFORMERS_NER = True
+def _get_ner_pipeline():
+    global _NER_PIPELINE
+    if _NER_PIPELINE is not None:
+        return _NER_PIPELINE
+    try:
+        from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification
+        # 使用一个通用的中文 NER 模型（可替换为你偏好的模型）
+        model_name = 'ckiplab/bert-base-chinese-ner'
+        _NER_PIPELINE = pipeline('ner', model=model_name, tokenizer=model_name, aggregation_strategy='simple')
+    except Exception:
+        _NER_PIPELINE = None
+    return _NER_PIPELINE
+
 
 def _normalize(text: str) -> str:
     return re.sub(r"\r", "\n", text or "").strip()
+
+
+def normalize_cjk_spacing(text: str) -> str:
+    """去除中文字符之间不必要的空白（把 '工 作 经 历' -> '工作经历'），并删除零宽字符。"""
+    if not text:
+        return text
+    # 删除零宽空格等
+    text = text.replace('\u200b', '')
+    # 把中文字符之间的空白去除，多次替换以覆盖连续拆分的情况
+    # 匹配: 中文字符 + 空白 + 中文字符
+    text = re.sub(r'([\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])', r"\1", text)
+    return text
 
 
 @dataclass
 class ResumeParseResult:
     name: Optional[str] = None
     age: Optional[str] = None
+    sex: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
     careers: List[str] = field(default_factory=list)
     projects: List[str] = field(default_factory=list)
     education: List[str] = field(default_factory=list)
+    # 结构化输出
+    careers_struct: List[Dict[str, Any]] = field(default_factory=list)
+    projects_struct: List[Dict[str, Any]] = field(default_factory=list)
+    education_struct: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def ResumeParse(text: str) -> ResumeParseResult:
@@ -27,6 +68,8 @@ def ResumeParse(text: str) -> ResumeParseResult:
         return ResumeParseResult()
 
     s = _normalize(text)
+    # 先规范中文间的空格（把 '工 作 经 历' 之类的拆分恢复为连写）
+    s = normalize_cjk_spacing(s)
     # 先清洗常见噪声：页眉/页脚（第1页共7页 等）、长的十六进制或重复编码串、纯符号行等
     # 删除典型的页码标记
     s = re.sub(r'第\s*\d+\s*页\s*共\s*\d+\s*页', '', s)
@@ -70,15 +113,113 @@ def ResumeParse(text: str) -> ResumeParseResult:
     # 在分块前，先从清洗后的前几行中尝试提取姓名（以保留原始header信息用于姓名提取）
     header_candidate = '\n'.join([ln for ln in clean_lines if ln.strip()][:6])
 
-    # 提取中文或英文姓名（优先尝试中文）
+    # 有时 header 是多项由 | 或 / 分隔的短项（例如: "男 | 年龄：28岁 | 13558910629 | 期望薪资"）
+    # 把这些行拆分并把能识别的个人信息剥离
+    header_items = []
+    for ln in header_candidate.splitlines():
+        if '|' in ln or '/' in ln or ';' in ln:
+            parts = re.split(r'[|/;，,]+', ln)
+            header_items.extend([p.strip() for p in parts if p.strip()])
+        else:
+            header_items.append(ln.strip())
+
+    # 初始化结果对象（确保 header 处理可以直接写入字段）
     result = ResumeParseResult()
-    zh_name = re.search(r'([\u4e00-\u9fa5]{2,4})', header_candidate)
-    if zh_name:
-        result.name = zh_name.group(1)
+
+    # 把 header_items 里的个人域识别出来并从 clean_lines 中移除相应短行
+    personal_short_re = re.compile(r'^(男|女|\d{1,3}岁|\+?\d{6,15}|\d{6,}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', re.I)
+    # 先从 header_items 中直接识别联系方式/年龄/性别等，并优先设置 result 的字段
+    for it in header_items:
+        if not it:
+            continue
+        it_strip = it.strip()
+        # 手机（优先严格的中国手机号格式）
+        m_mobile = re.search(r'(?<!\d)(?:\+?86[-\s]?)?(1[3-9]\d{9})(?!\d)', it_strip)
+        if m_mobile:
+            result.phone = m_mobile.group(1)
+            # 从 clean_lines 中移除
+            clean_lines = [ln for ln in clean_lines if ln.strip() != it_strip]
+            continue
+        # email
+        if re.search(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', it_strip):
+            result.email = re.search(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', it_strip).group(0)
+            clean_lines = [ln for ln in clean_lines if ln.strip() != it_strip]
+            continue
+        # 年龄
+        age_m_h = re.search(r'(\d{2})岁|年龄[:：]?\s*(\d{1,3})', it_strip)
+        if age_m_h:
+            age_val = age_m_h.group(1) or age_m_h.group(2)
+            result.age = age_val
+            clean_lines = [ln for ln in clean_lines if ln.strip() != it_strip]
+            continue
+        # 性别
+        if re.match(r'^(男|女)$', it_strip):
+            result.sex = it_strip
+            clean_lines = [ln for ln in clean_lines if ln.strip() != it_strip]
+            continue
+    # 如果 header_items 没设置 name，我们将在 header_candidate 中寻找候选姓名（排除诸如'年龄'等词）
+    result = ResumeParseResult() if 'result' not in locals() else result
+    stop_words_for_name = set(['年龄', '性别', '个人优势', '求职意向', '期望薪资', '期望城市', '工作经验'])
+    candidate_name = None
+    for it in header_items:
+        if not it:
+            continue
+        it2 = it.strip()
+        if any(sw in it2 for sw in stop_words_for_name):
+            continue
+        # 优先选择纯中文且长度为2-4的项
+        if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', it2):
+            candidate_name = it2
+            break
+    # 如果未找到且可用 jieba，尝试 posseg 在 header_candidate 上找 nr
+    if not candidate_name and _HAS_JIEBA and re.search(r'[\u4e00-\u9fff]', header_candidate):
+        try:
+            for w, flag in pseg.cut(header_candidate):
+                if flag == 'nr' and len(w) >= 2 and len(w) <= 4 and w not in stop_words_for_name:
+                    candidate_name = w
+                    break
+        except Exception:
+            pass
+    if candidate_name:
+        # 去除末尾可能跟着的性别标记（例如 '田晋宇男'）
+        result.name = re.sub(r'(男|女)$', '', candidate_name)
+
+    # 如果之前未通过 header_items 设置到 phone/email/age/sex，则后面再做更严格的提取
+
+    # 识别性别（中文/英文），优先在 header_candidate 中查找
+    sex = None
+    sex_m = re.search(r'性别[:：]?\s*(男|女)', header_candidate)
+    if not sex_m:
+        sex_m = re.search(r'性别[:：]?\s*(男|女)', s, re.I)
+    if not sex_m:
+        # 有时姓名后直接跟性别，如 "蒋大伟男" 或正文中出现姓名+性别
+        tail_sex = re.search(r'^[\u4e00-\u9fa5]{2,4}(男|女)$', header_candidate)
+        if not tail_sex:
+            tail_sex = re.search(r'([\u4e00-\u9fa5]{2,4})(男|女)', s)
+        sex_m = tail_sex
+    if sex_m:
+        # 如果捕获了多组（例如名+性别），取最后一组作为性别
+        try:
+            if sex_m.lastindex and sex_m.lastindex >= 2:
+                sex = sex_m.group(sex_m.lastindex)
+            else:
+                sex = sex_m.group(1)
+        except Exception:
+            sex = sex_m.group(1)
     else:
-        en_name = re.search(r'([A-Z][a-z]+\s+[A-Z][a-z]+)', header_candidate)
-        if en_name:
-            result.name = en_name.group(1)
+        # 英文 male/female
+        eng = re.search(r'\b(male|female)\b', header_candidate, re.I) or re.search(r'\b(male|female)\b', s, re.I)
+        if eng:
+            sex = eng.group(1).lower()
+
+    # 归一化：如果是英文 male/female，转换为中文 '男'/'女'，否则保留中文标记
+    if sex:
+        if sex.lower() == 'male':
+            result.sex = '男'
+        elif sex.lower() == 'female':
+            result.sex = '女'
+        else:
+            result.sex = sex
 
     # 现在从清洗后的行里剥离明显的个人信息行，避免它们被当作工作/项目块
     personal_line_re_list = [
@@ -119,37 +260,37 @@ def ResumeParse(text: str) -> ResumeParseResult:
     ]
     header_re = re.compile('|'.join('(?:%s)' % p for p in header_patterns), re.I)
 
-    lines_for_blocks = [ln for ln in s_clean.splitlines()]
-    blocks = []
-    current = []
-    current_header = None
-    # 公司行识别（若单独一行出现公司名，应作为新的块边界）
-    company_line_re = re.compile(r'^[\s\S]*?(公司|有限公司|科技|集团|股份)[\s\S]*$', re.I)
-    for ln in lines_for_blocks:
-        # 如果这一行是章节标题，开启新块
-        if header_re.match(ln.strip()):
-            # 开始新的块：先把现有块推入
-            if current:
-                blocks.append('\n'.join(current).strip())
-                current = []
-            # 把标题也作为块的首行
-            current.append(ln.strip())
-            current_header = ln.strip()
-            continue
-        # 如果这一行看起来像单独的公司名行，作为块边界（把当前块推入并以该行为新块首行）
-        if company_line_re.match(ln.strip()) and (not ln.strip().startswith('项目') and not ln.strip().startswith('教育')):
-            if current:
-                blocks.append('\n'.join(current).strip())
-            current = [ln.strip()]
-            current_header = ln.strip()
-            continue
-        # 普通行追加到当前块
-        current.append(ln)
-    if current:
-        blocks.append('\n'.join(current).strip())
+    # 更稳健的块拆分：基于章节 header 关键词把文本拆分为多个块（保留 header 行）
+    split_headers = r'教育经历|教育背景|教育|项目经验|项目经历|项目|工作经历|工作经验|职业经历|实习经历|自我评价|主要技能'
+    # 使用多行模式，在 header 前进行拆分（保留 header 行作为新块首行）
+    blocks = [b.strip() for b in re.split(r'(?m)(?=^\s*(?:' + split_headers + r')\b)', s_clean) if b.strip()]
+    # 进一步，如果某个块本身为空，删除
+    blocks = [b for b in blocks if b]
 
-    # 最后再把相邻空行产生的多段合并或清理空白块
-    blocks = [b for b in (b.strip() for b in blocks) if b]
+    # 如果某些块中间仍包含公司行或 '公司名 职位' 形式，把这些块按行拆分为更小块，
+    # 以便公司行能作为独立块被识别为 career 的起始
+    company_line_re = re.compile(r'^[\s\S]*?(公司|有限公司|科技|集团|股份)[\s\S]*$', re.I)
+    refined_blocks = []
+    for b in blocks:
+        lines = [ln for ln in b.splitlines()]
+        # 如果某行匹配公司行且不是块首行，则切分
+        split_indices = []
+        for idx, ln in enumerate(lines):
+            if idx > 0 and company_line_re.match(ln.strip()):
+                split_indices.append(idx)
+        if not split_indices:
+            refined_blocks.append(b)
+            continue
+        prev = 0
+        for si in split_indices:
+            part = '\n'.join(lines[prev:si]).strip()
+            if part:
+                refined_blocks.append(part)
+            prev = si
+        last = '\n'.join(lines[prev:]).strip()
+        if last:
+            refined_blocks.append(last)
+    blocks = refined_blocks
 
 
 
@@ -159,9 +300,19 @@ def ResumeParse(text: str) -> ResumeParseResult:
     if email_m:
         result.email = email_m.group(0)
 
-    phone_m = re.search(r'(?:\+?\d{1,3}[\s-])?(?:\(?0?\d{2,4}\)?[\s-])?[\d\s-]{6,15}', s)
+    # phone: 优先严格的中国手机号匹配，回退到较宽松的匹配但排除年份范围等
+    phone_m = re.search(r'(?<!\d)(?:\+?86[-\s]?)?(1[3-9]\d{9})(?!\d)', s)
     if phone_m:
-        result.phone = re.sub(r'[^0-9+]', '', phone_m.group(0))
+        result.phone = phone_m.group(1)
+    else:
+        phone_m2 = re.search(r'(?:\+?\d{1,3}[\s-])?(?:\(?0?\d{2,4}\)?[\s-])?[\d\s-]{6,15}', s)
+        if phone_m2:
+            raw = phone_m2.group(0)
+            # 如果是年份区间（例如 2018-2021），不要当作电话
+            if re.search(r'\d{4}\s*[-–—]\s*\d{4}', raw):
+                pass
+            else:
+                result.phone = re.sub(r'[^0-9+]', '', raw)
 
     age_m = re.search(r'(?:(?:Age|年龄)[:：]?\s*(\d{2})\b)', s, re.I)
     if age_m:
@@ -195,7 +346,22 @@ def ResumeParse(text: str) -> ResumeParseResult:
             if re.search(kw, block, re.I):
                 w += 2
         tech_count = len(tech_regex.findall(block))
+        # 如果可用 jieba，对于中文文本，检测组织名 (nt) 增强工作得分
+        if _HAS_JIEBA and re.search(r'[\u4e00-\u9fff]', block):
+            try:
+                for word, flag in pseg.cut(block):
+                    if flag == 'nt':
+                        w += 2
+                    # 人名在某些情况下提示该块可能为职责或项目的一部分
+                    if flag == 'nr':
+                        p += 0
+            except Exception:
+                pass
         p += tech_count
+        # 如果块中包含明显的个人信息（电话/邮箱/年龄/性别），对其进行惩罚，避免误判为工作/项目
+        if re.search(r'(姓名|性别|手机|电话|微信|邮箱|年龄|婚姻|户籍|居住地|基本资料)', block, re.I):
+            w = max(0, w - 2)
+            p = max(0, p - 2)
         return {"project": p, "education": e, "work": w}
 
     # 只把满足一定条件的块归为 projects/education，过滤残余噪声块
@@ -215,7 +381,8 @@ def ResumeParse(text: str) -> ResumeParseResult:
         i = 0
         while i < len(lines) and i < 4:
             ln = lines[i].strip()
-            if len(ln) < 120 and (name_gender_re.search(ln) or company_re.search(ln) or title_re.search(ln)):
+            # 对于非常短的 header-like 行（例如 '男 | 28岁' 或 '公司名'），也应剥离
+            if len(ln) < 120 and (name_gender_re.search(ln) or company_re.search(ln) or title_re.search(ln) or re.search(r'^[\|/;\-\w\s]{1,40}$', ln)):
                 i += 1
                 continue
             break
@@ -231,6 +398,17 @@ def ResumeParse(text: str) -> ResumeParseResult:
     for block in blocks:
         # 如果块以项目/教育标题开头，直接归类，避免关键字稀释或误判
         first_line = block.splitlines()[0].strip() if block.splitlines() else ''
+        # 如果首行看起来像公司名（例如包含 公司/有限公司/科技/集团/股份），直接归类为 career
+        if re.search(r'(公司|有限公司|科技|集团|股份)', first_line, re.I):
+            body = '\n'.join(block.splitlines()[1:]).strip()
+            # 把公司行与后续正文合并，便于后续的结构化解析识别 company/title/period
+            if body:
+                career_text = first_line + '\n' + body
+            else:
+                career_text = first_line
+            if career_text:
+                result.careers.append(career_text)
+            continue
         if project_header_re.match(first_line):
             # 去掉标题行后保存作为一个 project 条目
             body = '\n'.join(block.splitlines()[1:]).strip()
@@ -293,6 +471,87 @@ def ResumeParse(text: str) -> ResumeParseResult:
     result.careers = clean_list(result.careers)
     result.projects = clean_list(result.projects)
     result.education = clean_list(result.education)
+
+    # 启发式结构化拆分（尽量提取 company/title/period/responsibilities/technologies）
+    def split_career_block(block: str) -> Dict[str, Any]:
+        lines = [l.strip() for l in block.splitlines() if l.strip()]
+        item: Dict[str, Any] = { 'company': None, 'title': None, 'period': None, 'responsibilities': [], 'technologies': [] }
+        if not lines:
+            return item
+        # 第一行若包含公司关键词，则作为 company 或 title
+        first = lines[0]
+        if re.search(r'公司|有限公司|科技|集团|股份', first):
+            item['company'] = first
+            rest = lines[1:]
+        else:
+            # 尝试用行内模式提取 title 与 company
+            # 例如: "哲库（ZEKU）科技上海有限公司\n软件开发（高级主管工程师） 2022.12-至今"
+            if len(lines) > 1 and re.search(r'\d{4}', lines[1]):
+                item['company'] = first
+                rest = lines[1:]
+            else:
+                rest = lines
+
+        # 查找 period（形如 2022.12-至今 或 2018.09-2021.09）
+        period_re = re.compile(r'(\d{4}[\.\-年]?\d{0,2})\s*[-—–到至]\s*(\d{4}[\.\-年]?\d{0,2}|至今)', re.I)
+        title_re = re.compile(r'(职位|职务|软件|工程师|主管|经理|技术|开发|负责人|专家)', re.I)
+        tech_regex_local = re.compile(r'\b(Python|Java|C\+\+|C#|Go|Golang|Django|Flask|Docker|Kubernetes|FPGA|WiFi|BT|5G|4G|SMF)\b', re.I)
+        # 先把整个块传给 NER（若可用），以获取 ORG/DATE/PER 提示
+        ner_entities = []
+        if _USE_TRANSFORMERS_NER:
+            ner_pipe = _get_ner_pipeline()
+            if ner_pipe:
+                try:
+                    ner_entities = ner_pipe(block)
+                except Exception:
+                    ner_entities = []
+
+        # 如果 NER 返回 ORG/DATE/PER，优先填充
+        if ner_entities:
+            for ent in ner_entities:
+                g = ent.get('entity_group') or ent.get('entity')
+                w = ent.get('word') or ent.get('entity')
+                if not w:
+                    continue
+                if g and g.upper() in ('ORG', 'ORGANIZATION') and not item['company']:
+                    item['company'] = w
+                if g and g.upper() in ('PER', 'PERSON') and not result.name:
+                    result.name = w
+                if g and g.upper() in ('DATE', 'TIME') and not item['period']:
+                    item['period'] = w
+
+        for ln in rest:
+            # period
+            pm = period_re.search(ln)
+            if pm and not item['period']:
+                item['period'] = pm.group(0)
+                continue
+            # title
+            if not item['title'] and title_re.search(ln):
+                item['title'] = ln
+                continue
+            # techs
+            techs = tech_regex_local.findall(ln)
+            if techs:
+                item['technologies'].extend([t for t in techs if t])
+            # responsibilities（非标题/时间行则归为职责）
+            if not title_re.search(ln) and not period_re.search(ln):
+                item['responsibilities'].append(ln)
+
+        # 简单去重
+        item['technologies'] = list(dict.fromkeys(item['technologies']))
+        return item
+
+    # 构建结构化列表
+    for c in result.careers:
+        result.careers_struct.append(split_career_block(c))
+    for p in result.projects:
+        # 对项目也用相同拆分器（project name -> company/title heuristics）
+        result.projects_struct.append(split_career_block(p))
+    for e in result.education:
+        result.education_struct.append({'raw': e})
+
+    print(f"[ResumeParse]解析结果: {result.sex}")
 
     return result
 

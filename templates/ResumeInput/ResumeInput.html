@@ -42,6 +42,14 @@
 			<label for="email">邮箱</label>
 			<input id="email" name="email" type="email" placeholder="example@mail.com" />
 
+			<label for="sex">性别</label>
+			<select id="sex" name="sex">
+				<option value="">-- 请选择 --</option>
+				<option value="男">男</option>
+				<option value="女">女</option>
+				<option value="other">其他</option>
+			</select>
+
 			<div class="section">
 				<h3>职业经历</h3>
 				<label for="career">职业经历描述</label>
@@ -142,10 +150,24 @@
 						const ageEl = document.getElementById('age');
 						const contactEl = document.getElementById('contact');
 						const emailEl = document.getElementById('email');
+						const sexEl = document.getElementById('sex');
 						if(nameEl && parsed.name) nameEl.value = parsed.name;
 						if(ageEl && parsed.age) ageEl.value = parsed.age;
 						if(contactEl && parsed.phone) contactEl.value = parsed.phone;
 						if(emailEl && parsed.email) emailEl.value = parsed.email;
+						if(sexEl && parsed.sex){
+							const s = (parsed.sex + '').toString().trim();
+							if(/^(男|女)$/.test(s)){
+								sexEl.value = s;
+							} else if(/^male$/i.test(s)){
+								sexEl.value = '男';
+							} else if(/^female$/i.test(s)){
+								sexEl.value = '女';
+							} else {
+								sexEl.value = 'other';
+								sexEl.title = s; // 将原始值放到 title，便于人工查看
+							}
+						}
 
 						// parsed.careers -> 填到职业经历 textarea（追加或覆盖）
 						const careerEl = document.getElementById('career');
